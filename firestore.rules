@@ -1,0 +1,396 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // -----------------------------------------------------------------
+    // GLOBAL CATCH-ALL (DEFAULT DENY)
+    // -----------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -----------------------------------------------------------------
+    // GLOBAL HELPERS
+    // -----------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && 
+             userId is string && 
+             userId.size() <= 128 && 
+             request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email in ['marcelokbite@gmail.com', '3eatcru@gmail.com', 'surealfilmes@gmail.com', 'beatcru.official@gmail.com', 'miraela.marcelo@gmail.com', 'audtrilha@gmail.com', 'madeinfavela89@gmail.com'] ||
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // -----------------------------------------------------------------
+    // ENTITY VALIDATION HELPERS
+    // -----------------------------------------------------------------
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['role', 'createdAt']) &&
+             data.role in ['ADMIN', 'CREATOR', 'READER'] &&
+             (data.createdAt is number || data.createdAt is timestamp) &&
+             (data.keys().hasAll(['displayName']) ? (data.displayName is string && data.displayName.size() <= 100) : true) &&
+             (data.keys().hasAll(['photoURL']) ? (data.photoURL is string && data.photoURL.size() <= 200000) : true) &&
+             (data.keys().hasAll(['username']) ? (data.username is string && data.username.size() >= 3 && data.username.size() <= 30) : true) &&
+             (data.keys().hasAll(['coins']) ? (data.coins is number) : true) &&
+             (data.keys().hasAll(['promoCoins']) ? (data.promoCoins is number) : true) &&
+             (data.keys().hasAll(['bio']) ? (data.bio is string && data.bio.size() <= 2000) : true) &&
+             (data.keys().hasAll(['location']) ? (data.location is string && data.location.size() <= 100) : true) &&
+             (data.keys().hasAll(['website']) ? (data.website is string && data.website.size() <= 200) : true) &&
+             (data.keys().hasAll(['bannerUrl']) ? (data.bannerUrl is string && data.bannerUrl.size() <= 200000) : true) &&
+             (data.keys().hasAll(['language']) ? (data.language is string && data.language.size() <= 10) : true) &&
+             (data.keys().hasAll(['settings']) ? (data.settings is map) : true) &&
+             (data.keys().hasAll(['followersCount']) ? (data.followersCount is number) : true) &&
+             (data.keys().hasAll(['followingCount']) ? (data.followingCount is number) : true);
+    }
+
+    function isValidWork(data) {
+      return data.keys().hasAll(['title', 'authorId', 'type', 'createdAt', 'updatedAt']) &&
+             data.title is string && data.title.size() <= 200 &&
+             data.authorId == request.auth.uid &&
+             data.type in ['NOVEL', 'MANGA', 'WEBTOON'] &&
+             (data.createdAt is number || data.createdAt is timestamp) &&
+             (data.updatedAt is number || data.updatedAt is timestamp) &&
+             (data.keys().hasAll(['synopsis']) ? (data.synopsis is string && data.synopsis.size() <= 5000) : true) &&
+             (data.keys().hasAll(['tags']) ? (data.tags is list && data.tags.size() <= 10) : true);
+    }
+
+    function isValidChapter(data, workId) {
+      return data.keys().hasAll(['workId', 'num', 'title', 'createdAt', 'updatedAt']) &&
+             data.workId == workId &&
+             data.title is string && data.title.size() <= 200 &&
+             data.num is number &&
+             (data.createdAt is number || data.createdAt is timestamp) &&
+             (data.updatedAt is number || data.updatedAt is timestamp);
+    }
+
+    function isValidComment(data, workId) {
+      return data.keys().hasAll(['authorId', 'workId', 'content', 'createdAt']) &&
+             data.authorId == request.auth.uid &&
+             data.workId == workId &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 2000 &&
+             (data.createdAt is number || data.createdAt is timestamp);
+    }
+
+    function isValidPost(data) {
+      return data.keys().hasAll(['authorId', 'content', 'createdAt']) &&
+             data.authorId == request.auth.uid &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 5000 &&
+             data.createdAt is number;
+    }
+
+    function isValidPayout(data) {
+      return data.keys().hasAll(['authorId', 'authorName', 'pixKey', 'amount', 'status', 'createdAt']) &&
+             data.authorId == request.auth.uid &&
+             data.status == 'PENDING' &&
+             data.amount is number && data.amount > 0 &&
+             data.createdAt is number;
+    }
+
+    // -----------------------------------------------------------------
+    // COLLECTION MATCH BLOCKS
+    // -----------------------------------------------------------------
+
+    // USERS
+    match /users/{userId} {
+      allow read: if isSignedIn() || isAdmin();
+      
+      allow create: if isOwner(userId) && isValidUser(incoming()) && (
+        incoming().role == 'READER' || 
+        (incoming().role == 'ADMIN' && (request.auth.token.email in ['marcelokbite@gmail.com', '3eatcru@gmail.com', 'surealfilmes@gmail.com', 'beatcru.official@gmail.com', 'miraela.marcelo@gmail.com', 'audtrilha@gmail.com', 'madeinfavela89@gmail.com']))
+      ) &&
+                    incoming().coins == 500 &&
+                    (incoming().keys().hasAll(['promoCoins']) ? incoming().promoCoins == 200 : true);
+      
+      allow update: if (isOwner(userId) && isValidUser(incoming()) && (
+        // Action: Profile Update
+        (incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'username', 'bio', 'location', 'website', 'bannerUrl', 'followersCount', 'followingCount', 'language', 'settings'])) ||
+        // Action: Become Creator (Only if currently a reader)
+        (existing().role == 'READER' && incoming().role == 'CREATOR' && incoming().diff(existing()).affectedKeys().hasOnly(['role'])) ||
+        // Action: Admin Promotion
+        (incoming().role == 'ADMIN' && (request.auth.token.email in ['marcelokbite@gmail.com', '3eatcru@gmail.com', 'surealfilmes@gmail.com', 'beatcru.official@gmail.com', 'miraela.marcelo@gmail.com', 'audtrilha@gmail.com', 'madeinfavela89@gmail.com']) && incoming().diff(existing()).affectedKeys().hasOnly(['role'])) ||
+        // Action: Purchase Coins
+        (incoming().diff(existing()).affectedKeys().hasOnly(['coins']) && incoming().coins is number) ||
+        // Action: Claim Daily Bonus
+        (incoming().diff(existing()).affectedKeys().hasOnly(['promoCoins', 'lastBonusClaimAt']) && incoming().promoCoins is number && incoming().lastBonusClaimAt is number)
+      )) || (
+        // Action: Social Follow (Other users increment/decrement followersCount)
+        isSignedIn() && isValidUser(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['followersCount'])
+      ) || isAdmin();
+
+      match /unlockedChapters/{chapterId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && 
+                      incoming().keys().hasAll(['workId', 'unlockedAt']) &&
+                      (incoming().unlockedAt == request.time || incoming().unlockedAt is number);
+      }
+
+      match /favorites/{workId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /likes/{workId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /following_works/{workId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /history/{id} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /collections/{id} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /following/{creatorId} {
+        allow read: if true;
+        allow write: if isOwner(userId);
+      }
+
+      match /followers/{followerId} {
+        allow read: if true;
+        allow write: if isSignedIn(); // Social mechanism
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isSignedIn() || isAdmin();
+      }
+
+      match /wallet_transactions/{transactionId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // USERNAMES (Unique Registry)
+    match /usernames/{username} {
+      allow read: if true;
+      allow create: if isSignedIn() && (!exists(/databases/$(database)/documents/usernames/$(username))) && incoming().uid == request.auth.uid;
+      allow update: if isOwner(existing().uid) && incoming().uid == request.auth.uid;
+    }
+
+    // GLOBAL CHARACTERS
+    match /global_characters/{charId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && incoming().ownerId == request.auth.uid;
+      allow update: if isSignedIn() && isOwner(existing().ownerId) && incoming().ownerId == request.auth.uid;
+      allow delete: if isSignedIn() && isOwner(existing().ownerId);
+    }
+
+    // PROJECTS (Private Author Workspace)
+    match /projects/{projectId} {
+      allow read: if request.auth != null && (resource == null || request.auth.uid == resource.data.ownerId || isAdmin());
+      allow write: if request.auth != null && (
+        (request.method != 'create' && request.auth.uid == resource.data.ownerId) || 
+        isAdmin() || 
+        (request.method == 'create' && incoming().ownerId == request.auth.uid)
+      );
+      
+      match /{document=**} {
+         allow read: if request.auth != null && (
+           (exists(/databases/$(database)/documents/projects/$(projectId)) && 
+            request.auth.uid == get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId) || 
+           isAdmin()
+         );
+         allow write: if request.auth != null && (
+           (exists(/databases/$(database)/documents/projects/$(projectId)) && 
+            request.auth.uid == get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId) || 
+           isAdmin()
+         );
+      }
+    }
+
+    match /project_folders/{folderId} {
+      allow read: if request.auth != null && (resource == null || request.auth.uid == resource.data.ownerId || isAdmin());
+      allow write: if request.auth != null && (
+        (request.method != 'create' && request.auth.uid == resource.data.ownerId) || 
+        isAdmin() || 
+        (request.method == 'create' && incoming().ownerId == request.auth.uid)
+      );
+    }
+
+    // PUBLISHED WORKS (Public Catalog)
+    match /published_works/{workId} {
+      allow read: if true;
+      allow write: if isSignedIn() && (isOwner(resource.data.authorId) || isAdmin() || (request.method == 'create' && incoming().authorId == request.auth.uid));
+
+      match /chapters/{chapterId} {
+        allow read: if true;
+        allow write: if isSignedIn() && (isOwner(get(/databases/$(database)/documents/published_works/$(workId)).data.authorId) || isAdmin());
+      }
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn() && incoming().authorId == request.auth.uid && incoming().workId == workId;
+        allow update: if isSignedIn() && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['likes']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['isPinned']) ||
+          (isOwner(existing().authorId) && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'editedAt']))
+        );
+        allow delete: if isSignedIn() && (isOwner(existing().authorId) || isOwner(get(/databases/$(database)/documents/published_works/$(workId)).data.authorId) || isAdmin());
+
+        match /replies/{replyId} {
+          allow read: if true;
+          allow create: if isSignedIn() && incoming().authorId == request.auth.uid;
+          allow delete: if isSignedIn() && (isOwner(existing().authorId) || isOwner(get(/databases/$(database)/documents/published_works/$(workId)).data.authorId) || isAdmin());
+        }
+      }
+    }
+
+    // WORKS (Legacy/Merged Hub)
+    match /works/{workId} {
+      allow read: if true;
+      allow create: if isSignedIn() && 
+                    get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['CREATOR', 'ADMIN'] &&
+                    isValidWork(incoming()) &&
+                    (incoming().createdAt == request.time || incoming().createdAt is number) &&
+                    (incoming().updatedAt == request.time || incoming().updatedAt is number);
+      
+      allow update: if isSignedIn() && (
+        (isOwner(existing().authorId) && isValidWork(incoming()) && 
+         incoming().authorId == existing().authorId && 
+         (incoming().createdAt == existing().createdAt || incoming().createdAt is number) &&
+         (incoming().updatedAt == request.time || incoming().updatedAt is number) &&
+         incoming().diff(existing()).affectedKeys().hasAny(['title', 'synopsis', 'tags', 'isPublished', 'updatedAt', 'currentDraft', 'coverUrl', 'type'])) ||
+        // Action: Engagement (Anyone can increment)
+        (incoming().diff(existing()).affectedKeys().hasAny(['views', 'likes', 'favs'])) ||
+        isAdmin()
+      );
+      
+      allow delete: if isAdmin() || isOwner(existing().authorId);
+
+      match /chapters/{chapterId} {
+        allow read: if true;
+        allow write: if isSignedIn() && (isOwner(get(/databases/$(database)/documents/works/$(workId)).data.authorId) || isAdmin());
+      }
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn() && isValidComment(incoming(), workId) && (incoming().createdAt == request.time || incoming().createdAt is number);
+        allow update: if isSignedIn() && (isOwner(existing().authorId) || isAdmin() || incoming().diff(existing()).affectedKeys().hasOnly(['likes']));
+        allow delete: if isAdmin() || isOwner(existing().authorId);
+      }
+    }
+
+    // COMMUNITY POSTS
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if isSignedIn() && 
+                    get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['ADMIN', 'CREATOR'] &&
+                    isValidPost(incoming()) &&
+                    (incoming().createdAt == request.time || incoming().createdAt is number);
+      allow update: if isSignedIn() && (isOwner(existing().authorId) || isAdmin() || incoming().diff(existing()).affectedKeys().hasOnly(['likes', 'comments']));
+      allow delete: if isAdmin() || isOwner(existing().authorId);
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn() && incoming().authorId == request.auth.uid;
+        allow update: if isSignedIn() && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['likes']) ||
+          (isOwner(existing().authorId) && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'editedAt']))
+        );
+        allow delete: if isSignedIn() && (isOwner(existing().authorId) || isOwner(get(/databases/$(database)/documents/posts/$(postId)).data.authorId) || isAdmin());
+
+        match /replies/{replyId} {
+          allow read: if true;
+          allow create: if isSignedIn() && incoming().authorId == request.auth.uid;
+          allow delete: if isSignedIn() && (isOwner(existing().authorId) || isOwner(get(/databases/$(database)/documents/posts/$(postId)).data.authorId) || isAdmin());
+        }
+      }
+    }
+
+    // CHATS (Messaging)
+    match /chats/{chatId} {
+      allow read: if isSignedIn() && chatId.matches('.*' + request.auth.uid + '.*');
+      allow write: if isSignedIn() && chatId.matches('.*' + request.auth.uid + '.*');
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && chatId.matches('.*' + request.auth.uid + '.*');
+        allow create: if isSignedIn() && 
+                      chatId.matches('.*' + request.auth.uid + '.*') && 
+                      incoming().senderId == request.auth.uid;
+      }
+    }
+
+    // COLLECTION GROUP FOR SENT COMMENTS INDEXING / QUERYING
+    match /{path=**}/comments/{commentId} {
+      allow read: if isSignedIn() && (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    // PAYOUTS
+    match /payouts/{payoutId} {
+      allow get: if isSignedIn() && (isOwner(existing().authorId) || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.authorId == request.auth.uid);
+      allow create: if isSignedIn() && isValidPayout(incoming()) && (incoming().createdAt == request.time || incoming().createdAt is number);
+      allow update: if isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paidAt']);
+      allow delete: if isAdmin();
+    }
+
+    // TRANSACTIONS & WALLETS (SYSTEM ONLY)
+    match /wallets/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow write: if false; // strictly rejects direct writes from clients (handled strictly via Admin SDK)
+    }
+
+    match /transactions/{id} {
+      allow read: if (isSignedIn() && (resource == null || resource.data.userId == request.auth.uid)) || isAdmin();
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && (
+        incoming().type in ['BONUS_DAILY', 'BUY_GOLD'] && 
+        incoming().amount is number && incoming().amount > 0 &&
+        incoming().createdAt is number
+      );
+      allow update, delete: if false; // immutable ledger!
+    }
+
+    // ADMIN ONLY COLLECTIONS
+    match /campaigns/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /banners/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /test/connection {
+      allow read: if true;
+    }
+
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

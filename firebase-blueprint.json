@@ -1,0 +1,202 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile containing basic info and role.",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string", "maxLength": 100 },
+        "username": { "type": "string", "pattern": "^[a-zA-Z0-9_]{3,20}$" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["ADMIN", "CREATOR", "READER"] },
+        "email": { "type": "string" },
+        "coins": { "type": "integer" },
+        "promoCoins": { "type": "integer" },
+        "language": { "type": "string" },
+        "settings": { "type": "object" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": ["role", "createdAt"]
+    },
+    "UnlockedChapter": {
+      "title": "UnlockedChapter",
+      "description": "Indicates a user has paid for access to a chapter.",
+      "type": "object",
+      "properties": {
+        "workId": { "type": "string" },
+        "unlockedAt": { "type": "integer" }
+      },
+      "required": ["workId", "unlockedAt"]
+    },
+    "Favorite": {
+      "title": "Favorite",
+      "description": "Indicates a user has favorited a work.",
+      "type": "object",
+      "properties": {
+        "workId": { "type": "string" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": ["workId", "createdAt"]
+    },
+    "Work": {
+      "title": "Work",
+      "description": "A novel or manga uploaded by a creator.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 200 },
+        "authorId": { "type": "string" },
+        "type": { "type": "string", "enum": ["NOVEL", "MANGA"] },
+        "synopsis": { "type": "string", "maxLength": 5000 },
+        "tags": { "type": "array", "items": { "type": "string", "maxLength": 30 } },
+        "views": { "type": "integer" },
+        "likes": { "type": "integer" },
+        "favs": { "type": "integer" },
+        "isPublished": { "type": "boolean" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["title", "authorId", "type", "createdAt", "updatedAt"]
+    },
+    "Chapter": {
+      "title": "Chapter",
+      "description": "A chapter belonging to a Work.",
+      "type": "object",
+      "properties": {
+        "workId": { "type": "string" },
+        "num": { "type": "integer" },
+        "title": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string" },
+        "isPremium": { "type": "boolean" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["workId", "num", "title", "createdAt", "updatedAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "A comment left on a work or chapter.",
+      "type": "object",
+      "properties": {
+        "workId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "content": { "type": "string", "maxLength": 2000 },
+        "likes": { "type": "integer" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": ["workId", "authorId", "content", "createdAt"]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "A community discussion post.",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string", "maxLength": 5000 },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorPhoto": { "type": "string" },
+        "likes": { "type": "integer" },
+        "comments": { "type": "integer" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": ["content", "authorId", "createdAt"]
+    },
+    "Campaign": {
+      "title": "Campaign",
+      "description": "An event or marketing campaign.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["ACTIVE", "DRAFT", "FINISHED"] },
+        "participants": { "type": "integer" },
+        "endDate": { "type": "string" },
+        "createdAt": { "type": "integer" }
+      },
+      "required": ["title", "description", "status", "createdAt"]
+    },
+    "Payout": {
+      "title": "Payout",
+      "description": "A withdrawal request from a creator.",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "pixKey": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["PENDING", "PAID", "REJECTED"] },
+        "createdAt": { "type": "integer" },
+        "paidAt": { "type": "integer" }
+      },
+      "required": ["authorId", "authorName", "pixKey", "amount", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles. Editable only by self. Admin logic controls roles."
+    },
+    "/users/{userId}/unlockedChapters/{chapterId}": {
+      "schema": { "$ref": "#/entities/UnlockedChapter" },
+      "description": "Chapters unlocked by this user."
+    },
+    "/users/{userId}/favorites/{workId}": {
+      "schema": { "$ref": "#/entities/Favorite" },
+      "description": "Works favorited by this user."
+    },
+    "/usernames/{username}": {
+      "description": "Registry of unique usernames mapped to userIds."
+    },
+    "/works/{workId}": {
+      "schema": { "$ref": "#/entities/Work" },
+      "description": "Creative works uploaded by users."
+    },
+    "/works/{workId}/chapters/{chapterId}": {
+      "schema": { "$ref": "#/entities/Chapter" },
+      "description": "Chapters for a specific work."
+    },
+    "/works/{workId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+      "description": "Comments for a work."
+    },
+    "/posts/{postId}": {
+      "schema": { "$ref": "#/entities/Post" },
+      "description": "Community discussion posts."
+    },
+    "/campaigns/{campaignId}": {
+      "schema": { "$ref": "#/entities/Campaign" },
+      "description": "Marketing campaigns and events."
+    },
+    "/payouts/{payoutId}": {
+      "schema": { "$ref": "#/entities/Payout" },
+      "description": "Withdrawal requests for creators."
+    },
+    "/transactions/{id}": {
+      "schema": { "type": "object", "properties": { "amount": { "type": "number" }, "userId": { "type": "string" }, "type": { "type": "string" }, "createdAt": { "type": "integer" } } },
+      "description": "Coin purchases and revenue logs."
+    },
+    "/banners/{bannerId}": {
+       "description": "Promotional banners for the home screen."
+    },
+    "/settings/{id}": {
+       "description": "System settings and feature flags."
+    },
+    "/wallets/{uid}": {
+       "description": "Secure balance records, managed by backend."
+    },
+    "/users/{userId}/history/{id}": {
+       "description": "Reading history for the user."
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+       "description": "Real-time user notifications."
+    },
+    "/users/{userId}/collections/{id}": {
+       "description": "Custom reading lists created by the user."
+    },
+    "/users/{userId}/following/{creatorId}": {
+       "description": "Creators this user follows."
+    },
+    "/users/{userId}/followers/{followerId}": {
+       "description": "Users following this user."
+    }
+  }
+}
