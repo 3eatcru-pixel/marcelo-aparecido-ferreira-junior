@@ -11,22 +11,25 @@ export function DocsTab({ onSelectDoc, query, category, refreshKey, moduleStatus
 
   useEffect(() => {
     setLoading(true);
-    fetch("/api/admin/docs")
-      .then(res => {
-        if (!res.ok) throw new Error("Docs unavailable");
-        return res.json();
-      })
-      .then((data: ProjectDoc[]) => {
-        setDocs(data);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, [refreshKey]);
+    
+    const timeout = setTimeout(() => {
+      fetch(`/api/admin/docs?q=${encodeURIComponent(query)}`)
+        .then(res => {
+          if (!res.ok) throw new Error("Docs unavailable");
+          return res.json();
+        })
+        .then((data: ProjectDoc[]) => {
+          setDocs(data);
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    }, 250);
+
+    return () => clearTimeout(timeout);
+  }, [refreshKey, query]);
 
   const filteredDocs = docs.filter(d =>
-    (category ? d.category === category : true) &&
-    (d.name.toLowerCase().includes(query.toLowerCase()) ||
-     d.category.toLowerCase().includes(query.toLowerCase()))
+    category ? d.category === category : true
   );
 
   // Dynamic QA stats from checklist docs

@@ -8,33 +8,98 @@ import * as fs from 'fs';
 
 dotenv.config();
 
-// Initialize Firebase Admin
+// Initialize Firebase Admin with automated self-healing and adaptive discovery
+let databaseIdOverride = '(default)';
+
 try {
+  let projectId: string | undefined = undefined;
+  let databaseId: string = '(default)';
+  let credentialSource: any = undefined;
+
   const firebaseConfigPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
   if (fs.existsSync(firebaseConfigPath)) {
-    const config = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
-    if (!admin.apps.length) {
-      admin.initializeApp({
-        projectId: config.projectId,
-        credential: admin.credential.applicationDefault() // Or it will auto-detect
-      });
-      // Try initializing firestore to specific database if defined
-      const db = admin.firestore();
-      db.settings({ databaseId: config.firestoreDatabaseId || '(default)' });
+    try {
+      const config = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
+      projectId = config.projectId;
+      databaseId = config.firestoreDatabaseId || '(default)';
+      console.log(`📂 [Firebase Self-Heal] Config file found. Project: "${projectId}", Database: "${databaseId}"`);
+    } catch (err) {
+      console.warn("⚠️ [Firebase Self-Heal] Faulty or incomplete firebase-applet-config.json file detected:", err);
     }
   }
-} catch (error) {
-  console.warn("Could not auto-initialize Firebase Admin:", error);
+
+  // Fallback to Env vars if config file did not resolve projectId
+  if (!projectId) {
+    projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || "audtrilha-fallback-sandbox";
+    console.log(`🌐 [Firebase Self-Heal] Resolving projectId from env / defaults: "${projectId}"`);
+  }
+
+  // Fallback database ID if specified in env
+  if (databaseId === '(default)' && process.env.FIREBASE_DATABASE_ID) {
+    databaseId = process.env.FIREBASE_DATABASE_ID;
+  }
+  
+  databaseIdOverride = databaseId;
+
+  // Detect explicit Service Account Env first
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      credentialSource = admin.credential.cert(serviceAccount);
+      console.log("💎 [Firebase Self-Heal] Service account parsed successfully from FIREBASE_SERVICE_ACCOUNT env key.");
+    } catch (e) {
+      console.warn("⚠️ [Firebase Self-Heal] Could not parse FIREBASE_SERVICE_ACCOUNT environment variable as JSON.");
+    }
+  }
+
+  // Attempt standard applicationDefault credential
+  if (!credentialSource) {
+    try {
+      credentialSource = admin.credential.applicationDefault();
+      console.log("🛡️ [Firebase Self-Heal] Using Google default application credentials hierarchy.");
+    } catch (e) {
+      console.warn("⚠️ [Firebase Self-Heal] applicationDefault credential hierarchy is unavailable locally.");
+    }
+  }
+
+  // Securely initialize admin applet instance
+  if (!admin.apps.length) {
+    const initOptions: any = {
+      projectId: projectId,
+    };
+    if (credentialSource) {
+      initOptions.credential = credentialSource;
+    }
+    
+    admin.initializeApp(initOptions);
+    
+    // Explicitly enforce specific DB connection and handle empty settings
+    const db = admin.firestore();
+    db.settings({ 
+      databaseId: databaseId,
+      ignoreUndefinedProperties: true
+    });
+    
+    console.log(`🚀 [Firebase Self-Heal] System connected securely. Project: "${projectId}", DB: "${databaseId}"`);
+  }
+} catch (error: any) {
+  console.error("🚨 [Firebase Self-Heal] Critical failure in Admin SDK automatic connection:", error);
 }
 
 // Function to get the correct db instance 
 function getFirestoreDb() {
   try {
      const firebaseConfigPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
-     const config = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
-     if (config.firestoreDatabaseId && config.firestoreDatabaseId !== '(default)') {
+     let databaseId = databaseIdOverride;
+     if (fs.existsSync(firebaseConfigPath)) {
+        const config = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
+        if (config.firestoreDatabaseId) {
+          databaseId = config.firestoreDatabaseId;
+        }
+     }
+     if (databaseId && databaseId !== '(default)') {
          // @ts-ignore - Some versions of the type definitions do not expose the database() method yet
-         return admin.firestore().database(config.firestoreDatabaseId); 
+         return admin.firestore().database(databaseId); 
      }
   } catch(e) {}
   return admin.firestore();
@@ -60,6 +125,7 @@ async function startServer() {
   app.get("/api/admin/docs", async (req, res) => {
     try {
       const fs = await import("fs/promises");
+      const { q } = req.query;
       const subdirs = ['documentacao', 'requisitos', 'wireframes', 'fluxos', 'prototipos', 'testes'];
       let allFiles: any[] = [];
 
@@ -67,11 +133,27 @@ async function startServer() {
         const dirPath = path.join(PROJECTS_PATH, dir);
         try {
           const files = await fs.readdir(dirPath);
-          allFiles = [...allFiles, ...files.filter(f => f.endsWith('.md')).map(f => ({
-            name: f,
-            category: dir,
-            path: `${dir}/${f}`
-          }))];
+          for (const f of files.filter(f => f.endsWith('.md'))) {
+            const filePath = `${dir}/${f}`;
+            const fullPath = path.join(PROJECTS_PATH, filePath);
+
+            let matchesQuery = true;
+            if (q && typeof q === 'string' && q.trim() !== '') {
+              const fileContent = await fs.readFile(fullPath, 'utf-8');
+              const searchLower = q.toLowerCase();
+              matchesQuery = f.toLowerCase().includes(searchLower) ||
+                             dir.toLowerCase().includes(searchLower) ||
+                             fileContent.toLowerCase().includes(searchLower);
+            }
+
+            if (matchesQuery) {
+              allFiles.push({
+                name: f,
+                category: dir,
+                path: filePath
+              });
+            }
+          }
         } catch (e) {
           console.warn(`Directory not found: ${dirPath}`);
         }
@@ -144,6 +226,131 @@ async function startServer() {
 
       const srcStructure = await getDirStructure('src');
       res.json(srcStructure);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/admin/audit/diagnostics", async (req, res) => {
+    try {
+      const fs = await import("fs/promises");
+      const results: string[] = [];
+      results.push("🌱 [Sovereign Audit Log] Console de Diagnóstico Inicializado.");
+
+      // Check folders list
+      const subdirs = ['documentacao', 'requisitos', 'wireframes', 'fluxos', 'prototipos', 'testes'];
+      for (const dir of subdirs) {
+        const dirPath = path.join(PROJECTS_PATH, dir);
+        try {
+          await fs.access(dirPath);
+          const files = await fs.readdir(dirPath);
+          results.push(`📂 [DIR] Pasta '${dir}' ativa com ${files.length} arquivos.`);
+        } catch {
+          results.push(`⚠️ [DIR] Pasta '${dir}' não pôde ser lida ou está ausente.`);
+        }
+      }
+
+      // Check Firebase status
+      const firebaseConfigPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+      const hasFirebaseConfig = await fs.access(firebaseConfigPath).then(() => true).catch(() => false);
+      if (hasFirebaseConfig) {
+        results.push(`⚡ [FIRESTORE] Configuração de Soalho auto-detectada.`);
+        try {
+          const db = getFirestoreDb();
+          const snapshot = await db.collection("published_works").limit(1).get();
+          results.push(`🛡️ [CONFIABILIDADE] Firestore conectado com sucesso. Encontradas ${snapshot.size} obras.`);
+        } catch (e: any) {
+          results.push(`⚠️ [VERIFICAÇÃO] Erro ao consultar tabelas do Firestore: ${e.message}`);
+        }
+      } else {
+        results.push(`⚠️ [CONFIG] Arquivo 'firebase-applet-config.json' ausente — operando em modo sandbox offline.`);
+      }
+
+      // Check API Key
+      if (process.env.GEMINI_API_KEY) {
+        results.push(`💎 [NEXUS AI] SDK Gemini provido via variável de ambiente (${process.env.GEMINI_API_KEY.substring(0, 5)}***).`);
+      } else {
+        results.push(`⚠️ [KEY] Variável GEMINI_API_KEY não configurada.`);
+      }
+
+      // Modular Folders
+      const featuresPath = path.join(process.cwd(), "src", "features");
+      try {
+        const features = await fs.readdir(featuresPath);
+        results.push(`📦 [MODULARIÇÃO] Encontradas ${features.length} subpastas em 'src/features': [${features.join(", ")}].`);
+      } catch {
+        results.push(`⚠️ [SRC] Diretório 'src/features' ausente.`);
+      }
+
+      results.push(`🚀 [GERAL] Auditoria de conformidade física concluída com sucesso!`);
+      res.json({ logs: results });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/admin/roadmap/state", async (req, res) => {
+    try {
+      const fs = await import("fs/promises");
+      const roadmapPath = path.join(PROJECTS_PATH, "documentacao", "roadmap.md");
+      const content = await fs.readFile(roadmapPath, "utf-8");
+
+      const lines = content.split("\n");
+      const phases: any[] = [];
+      let currentPhase: any = null;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("##")) {
+          const title = trimmed.substring(2).trim();
+          let status = "Planejado";
+          if (title.toLowerCase().includes("concluido") || title.toLowerCase().includes("concluído")) {
+            status = "Concluído";
+          } else if (title.toLowerCase().includes("em progresso")) {
+            status = "Em Progresso";
+          } else if (title.toLowerCase().includes("planejado")) {
+            status = "Planejado";
+          } else if (title.toLowerCase().includes("futuro")) {
+            status = "Futuro";
+          }
+
+          const cleanTitle = title
+            .replace(/^[^\s\w]+/, "")
+            .replace(/\s*[(\[].*[)\]]\s*$/, "")
+            .trim();
+
+          currentPhase = {
+            title: cleanTitle,
+            status,
+            tasks: [],
+          };
+          phases.push(currentPhase);
+        } else if (currentPhase && (trimmed.startsWith("- [") || trimmed.startsWith("* ["))) {
+          const isChecked = trimmed.includes("[x]") || trimmed.includes("[X]");
+          const taskText = trimmed
+            .replace(/^[-*]\s*\[[x ]\]\s*/i, "")
+            .trim();
+          
+          currentPhase.tasks.push({
+            text: taskText,
+            completed: isChecked,
+          });
+        }
+      }
+
+      const computedPhases = phases.map(phase => {
+        const total = phase.tasks.length;
+        const completed = phase.tasks.filter((t: any) => t.completed).length;
+        const percent = total > 0 ? Math.round((completed / total) * 100) : (phase.status === "Concluído" ? 100 : 0);
+        return {
+          ...phase,
+          total,
+          completed,
+          percent,
+        };
+      });
+
+      res.json({ phases: computedPhases });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

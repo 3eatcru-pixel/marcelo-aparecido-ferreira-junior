@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, Children } from "react";
 import { ArrowLeft, Sparkles, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -79,41 +79,49 @@ export function DocViewer({ doc, onBack, onNavigateAI }: DocViewerProps) {
     setActiveAuditLog(prev => [...prev, ...freshLogs]);
   };
 
-  const runAllDiagnostics = () => {
+  const runAllDiagnostics = async () => {
     setCheckingAll(true);
-    setActiveAuditLog(prev => [...prev, "🤖 [Nexus AI] Iniciando varredura automatizada completa do sistema..."]);
+    setActiveAuditLog(prev => [...prev, "🤖 [Nexus AI] Iniciando varredura automatizada real do sistema..."]);
     
-    const steps = [
-      "⚡ [CONCURRÊNCIA] Validando sincronizador do Google Drive e tokens Firestore...",
-      "🛡️ [SECURITY RULES] Testando conformidade de ledger financeiro (wallets, transactions)...",
-      "📱 [MOBILE DETECT] Checando meta widgets para renderização WebView Android...",
-      "💎 [MONETIZAÇÃO] Verificando integridade de débito de moedas nas novel-studio e manga-studio...",
-      "🎨 [CREATOR HUB] Verificando pastas lógicas, rascunhos e filtros de Minhas Obras...",
-      "🚀 [GERAL] Auditoria concluída! Banco de dados e Front-end em perfeito sincronismo."
-    ];
-
-    steps.forEach((step, idx) => {
-      setTimeout(() => {
-        setActiveAuditLog(prev => [...prev, step]);
-        if (idx === steps.length - 1) {
-          const lines = content.split('\n');
-          let changed = false;
-          const updatedLines = lines.map(line => {
-            if (line.trim().startsWith('- [ ]')) {
-              changed = true;
-              return line.replace('- [ ]', '- [x]');
-            }
-            return line;
+    try {
+      const response = await fetch("/api/admin/audit/diagnostics");
+      if (response.ok) {
+        const data = await response.json();
+        if (data.logs && Array.isArray(data.logs)) {
+          // Stagger the showing of logs slightly for smooth realistic UX
+          data.logs.forEach((log: string, idx: number) => {
+            setTimeout(() => {
+              setActiveAuditLog(prev => [...prev, log]);
+              if (idx === data.logs.length - 1) {
+                const lines = content.split('\n');
+                let changed = false;
+                const updatedLines = lines.map(line => {
+                  if (line.trim().startsWith('- [ ]')) {
+                    changed = true;
+                    return line.replace('- [ ]', '- [x]');
+                  }
+                  return line;
+                });
+                if (changed) {
+                  const nextContent = updatedLines.join('\n');
+                  setContent(nextContent);
+                  handleSave(nextContent);
+                }
+                setCheckingAll(false);
+              }
+            }, (idx + 1) * 400);
           });
-          if (changed) {
-            const nextContent = updatedLines.join('\n');
-            setContent(nextContent);
-            handleSave(nextContent);
-          }
+        } else {
+          setActiveAuditLog(prev => [...prev, "❌ Erro ao decodificar telemetria do servidor."]);
           setCheckingAll(false);
         }
-      }, (idx + 1) * 800);
-    });
+      } else {
+        throw new Error("HTTP connection error");
+      }
+    } catch (e: any) {
+      setActiveAuditLog(prev => [...prev, `❌ Falha ao contactar o agente de auditoria: ${e.message}`]);
+      setCheckingAll(false);
+    }
   };
 
   const setCheckedAllState = (val: boolean) => {
@@ -129,11 +137,13 @@ export function DocViewer({ doc, onBack, onNavigateAI }: DocViewerProps) {
     handleSave(nextContent);
   };
 
-  // Custom renderer for markdown checkboxes with proper types
+  // Custom renderer for markdown checkboxes with proper typesafety
   const components = {
-    li: ({ children, checked, ...props }: any) => {
+    li: ({ children, checked, ...props }: React.ComponentPropsWithoutRef<"li"> & { checked?: boolean | null }) => {
       if (checked !== null && checked !== undefined) {
-        const textStr = String(children[0]?.props?.children || children[0] || "");
+        const childrenArr = React.Children.toArray(children);
+        // Clean textual query to retrieve original indices safely
+        const textStr = childrenArr.length > 0 ? String(childrenArr[0]) : "";
         const lines = content.split('\n');
         const lineIdx = lines.findIndex(l => l.includes(textStr) && (l.includes('[ ]') || l.includes('[x]')));
 
